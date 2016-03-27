@@ -1,0 +1,27 @@
+Data Science: 4,370
+Big Data: 4,330
+Analytics: 4,380 
+Machine Learning: 1,090
+Data Mining: 2,080 
+Hadoop: 2,410
+Pivotal: 1,840
+Visualization: 2,620
+Deep Learning: 326
+Python: 1,130
+Business Intelligence: 2,550
+R Programming: 1,120
+Data Scientist: 4,200
+Predictive Modeling: 898
+Clustering: 468
+Operations Research: 513
+Statistician: 1,090
+NoSQL: 221
+Graph Database: 202
+Database: 1,460
+SQL: 945
+Excel: 3,800
+IoT (Internet of Things): 1,800
+Data Warehouse: 408
+Data Engineer: 1,940
+Data Architect: 911
+API: 3,220

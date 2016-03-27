@@ -1,0 +1,234 @@
+---
+title: "DataScienceBlogsAnalysis"
+author: "Richard Soon"
+date: "Sunday, November 08, 2015"
+output: html_document
+---
+
+#Summary
+This document aims to analysis the contents of blogs on data science websites(http://www.datasciencecentral.com/, http://www.analyticbridge.com/, http://www.bigdatanews.com/), that is, building keywords list from the blog corpus, creating feautures based on frequence of keywords, exploring models to classify those blogs.
+
+#Data Acquisition
+Ahead of this analysis, I have already scraped the links, contents and popularity of blogs by Python, mainly using "urllib2", "cookie", "BeautifulSoup" modules. Considering that I just finished my Natural Language Processing Capstone project through R several months ago, I will still use R and relevant packages(tm, RWeka and etc) to handle this analysis.
+
+#Data Cleaning
+Now there're three packs of blogs from the websites mentioned above, first we load them into corpus.
+```{r}
+library(tm)
+path<-"Blogs"
+blogs<-Corpus(DirSource(path,encoding="utf-8",recursive=T),readerControl = list(reader = readPlain,language="en"))
+blogs
+```
+There are 3324 articles in total. Let's have a look at the corpus. First try to figure out the number of characters in each blog. 
+```{r}
+getLength<-function(x){nchar(x[[1]][1])}#Get the length
+lens<-sapply(blogs$content,getLength)#Get character counts of reach blog
+hist(lens,xlab="Count of Characters",main="Histogram of Character Counts")#Histogram
+sum(lens<50)#How many blogs with characters fewer than 50
+```
+There 22 blogs with fewer than 50 characters, not quite usual, should be removed.
+```{r}
+blogs$content<-blogs$content[lens>=50]
+blogs$content[[1]][1]
+```
+
+Next remove extra spaces, foreign language signs, numbers as they are not important for text analysis.
+```{r}
+blogs<-tm_map(blogs,content_transformer(stripWhitespace))
+blogs<-tm_map(blogs,content_transformer(removeNumbers))
+replacewords<-function(line,wordA,wordB){gsub(wordA,wordB,line)}
+blogs<-tm_map(blogs,content_transformer(replacewords),"[^0-9a-zA-Z,.:!?'¡¯ -@$&]"," ")
+```
+
+#Find the most frequent words
+Now Figure out term matrix and find out the words whose frequency are above 1000.
+```{r}
+tdm<-TermDocumentMatrix(blogs)
+tdm
+findFreqTerms(tdm,1000,Inf)
+```
+
+There are over 100 frequent words in blogs, but many of them are stop words, also many punctuations exist in the words, let's remove stopwords and punctuations. Also some very very long words should be neglected because they are logo names or something else useless.
+Instead of analyzing the frequence of terms directly, we use TfIdf weighting method which can eliminate the influence of irrelevant words.
+```{r}
+tdm<-TermDocumentMatrix(blogs,control=list(removePunctuation=T,minDocFreq=5,stopwords=T,wordLengths = c(2, 20), weighting = function(x) weightTfIdf(x, normalize = FALSE)))#remove stopwords and punctuation
+frequentWords<-findFreqTerms(tdm,2500,Inf)
+frequentWords
+```
+
+#Words Cloud
+Here we explore the weighted frequencies of words by word cloud. Certain words like "learning"
+```{r}
+library(wordcloud)
+wc<-as.matrix(removeSparseTerms(tdm,0.9))
+v<-sort(rowSums(wc),decreasing=T)
+wordcloud(names(v),v)
+```
+Certain words like "statistics", "hadoop", "mining" are relevant to data science, whereas "still", "people"," new" and etc are not relevant. You will realize some of them are stop words which appears veyr often in articles although we have removed some stop words in advance.
+```{r}
+keywords<-frequentWords
+```
+
+
+#Find associated words
+In order to find the association between words, we use findAssocs tool in tm package. We presume the correlation limites are 0.6 for each word.
+```{r}
+associateWords<-findAssocs(tdm,keywords,0.6)#Find the associated words and return a list
+temp<-sapply(associateWords,length)#Show the number of associated words
+temp
+```
+There are many associated words of "analytics"",while most of them are website names, therefore, "analytics" can be neglected in terms of association. And we list the words and their associated words.
+```{r}
+temp[temp>0]
+associateWords[c("big","business","database","machine","mining","social")]
+```
+It's not easy to find associated words in this way, if we reduce the limited ratio, more relevant words will appear, but it is very time-consuming. Let's try some other methods.
+```{r}
+hc<-hclust(dist(removeSparseTerms(tdm,0.9)),method="ward.D")
+plot(hc,xlab="Words from Blogs",hang = -1)
+wordCluster<-cutree(hc,k=8)
+wordCluster<-sort(wordCluster)
+wordCluster
+```
+It is clear that "maching", "learning" belong to the same type, whereas "model", "predictive", "big", "data" belong to another type. Besides, those words of type 1 tend to be stop words and irrelevant to data science.
+```{r}
+index<-wordCluster>1
+keywords<-names(wordCluster[index])
+keywords
+```
+Still, some irrelevant words are among key words.
+```{r}
+mystopwords<-c("best","better","may","might","new","will","within","this","well","you","often","but","can","the","first","rather","want","year","years","much","many","just","however","even","see","think","amp","also","every","need","may","now","two","help","one","good","dont","know","us","work","large","call","book","open","small","chang","public")
+keywords<-removeWords(keywords,mystopwords)
+keywords<-keywords[keywords!=""]
+keywords
+```
+
+#Stemming
+There are some words appearing with their plus forms in the list, we use stem method to get the basic forms.
+```{r}
+keywordsStem<-stemDocument(keywords)
+keywordsStem<-unique(keywordsStem)
+keywordsStem
+```
+
+#n-gram Tokenization
+Previously, we've analyzed the TfIdf weighted single words, in order to extract the most frequent long tail terms, we should use 2-grams, 3-grams or 4-grams. Let's have a look at 2-grams.
+```{r}
+library(RWeka)
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+tdm2<-TermDocumentMatrix(blogs,control=list(tokenize=BigramTokenizer,removePunctuation=T,minDocFreq=5,stopwords=T,weighting = function(x) weightTfIdf(x, normalize = FALSE)))
+
+```
+Have a llok at those terms.
+```{r}
+wc<-as.matrix(removeSparseTerms(tdm2,0.9))
+v<-sort(rowSums(wc),decreasing=T)
+wordcloud(names(v),v)
+bigramWords<-findFreqTerms(tdm2,3000,Inf)
+bigramWords
+```
+Select relevant and useful terms, also those terms correspond the results of association discussed early.
+```{r}
+usefulTerms<-c("big data","machine learning","predictive analytics","data mining","data scientist","data analytics","data scientist","data science") 
+keyTerms<-c(keywords,usefulTerms)
+```
+
+Then look at 3-grams.
+```{r}
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+tdm3<-TermDocumentMatrix(blogs,control=list(tokenize=TrigramTokenizer,wordLength=c(2,30),removePunctuation=T,minDocFreq=5,weighting = function(x) weightTfIdf(x, normalize = FALSE)))
+trigramWords<-findFreqTerms(tdm3,1000,Inf)
+trigramWords<-trigramWords[nchar(trigramWords)<100]
+trigramWords
+```
+It seems all the useful information has been included in unigrams and bigrams, trigrams do not provide much information.
+```{r}
+write(keyTerms,"keyTerms.txt")
+```
+Now we have build a keyword list of blogs, based on which next we'll do clustering work.
+
+#Build frequency table
+Calculate frequency of each word in each blog, then find the counts of keywords, and store them in a data.table file(usually faster than data frame). We divide them 
+```{r}
+library(data.table)
+
+
+
+
+
+countKeywords<-function(termTable,keywords)#return the counts of keywords in a blog
+  {
+  wordcount<-termTable[keywords]#Select the matrix of key words
+  names(wordcount)<-keywords
+  wordcount[is.na(wordcount)]<-0#if some words do not appear in this blog, set the count 0
+  wordcount
+  }
+wordFreqs<-tm_map(blogs,termFreq)#find out the counts of all words in each blog
+keywordFreqs<-tm_map(wordFreqs,countKeywords,keywords)#find out the counts of keywords in each blog
+blogMeta<-tm_map(blogs,meta)#find out meta data of each blog, which has names of blogs
+```
+
+As for the long tail keywords, we can also find the frequency in the same way.
+```{r}
+wordFreqs2<-tm_map(blogs,termFreq,control=list(tokenize=BigramTokenizer))#find out the counts of all words in each blog
+keywordFreqs2<-tm_map(wordFreqs2,countKeywords,usefulTerms)
+```
+
+Now we create a data table to store all the information, in order to speed up the process, we'd better use functions like apply, sapply, tm_map instead of for loop.
+```{r}
+keywordsCount_matrix<-sapply(keywordFreqs$content,unlist)#Get keyword counts of each blog and save them in a matrix
+keywordsCount_matrix<-t(keywordsCount_matrix)#transpose the matrix
+keywordsCount_matrix2<-sapply(keywordFreqs2$content,unlist)#Get keyword counts of each blog and save them in a matrix
+keywordsCount_matrix2<-t(keywordsCount_matrix2)#transpose the matrix
+joints<-cbind(keywordsCount_matrix,keywordsCount_matrix2)
+keywordsCount_dt<-data.table(joints)#Convert to data table
+```
+
+Besides, we need add a new column of blog names.
+```{r}
+getId<-function(metadata){id<-metadata['id'];gsub(".txt","",id)}#The metadata id specifies the text names
+blogNames<-sapply(blogMeta$content,getId)#Get the id of each blog                           
+keywordsCount_dt$blog_name<-unlist(blogNames)#store the names in data table
+```
+
+#Explore the blogs
+It is difficult to do exploratory work on keywords distribution data directly due to the dimensions, therefore we adopt PCA method to reduce dimensions, then we make plots of the distrubution of those blogs.
+```{r}
+pca<-prcomp(keywordsCount_dt[,-86])
+cumsum(pca$sdev^2/sum(pca$sdev^2))#Calculate the precentage of total variance
+```
+At least 29 dimensions whose total variance adds up to 90 percent. In order to plot the data, we just select the first two principal components.
+```{r}
+dat<-pca$x[,1:2]
+plot(dat[,1],dat[,2],xlab="First Principal Component",ylab="Second Principal Component",main="Principal Analysis of Blogs")
+```
+It is clear some blogs are outliners. Next we will remove the outliners.
+```{r}
+index<-dat[,1]>100#Select those outliners, the first principal over 100
+keywordsCount_dt<-keywordsCount_dt[!index,]
+```
+
+
+#Blog Classification
+Initially, we can use k-means to classify blogs.
+```{r}
+km<-kmeans(keywordsCount_dt[,-87],centers=2)
+km$centers
+```
+It seems the second type is more relevant with keywords like algorithms, data, analysis. Let's do some exploratory work again based on the classification.
+```{r}
+pca<-prcomp(keywordsCount_dt[,-87])
+dat<-pca$x[,1:2]
+plot(dat[,1],dat[,2],xlab="First Principal Component",ylab="Second Principal Component",main="Principal Analysis of Blogs",col=km$cluster)
+```
+THe border is not quite clear, perhaps this classification is not good, let's try another method.
+Now have a look at hierarchy cluster.
+```{r}
+hcl<-hclust(dist(keywordsCount_dt[,-87]),method="complete")
+result<-cutree(hcl,k=2)
+plot(result)
+plot(dat[,1],dat[,2],xlab="First Principal Component",ylab="Second Principal Component",main="Principal Analysis of Blogs",col=result)
+```
+It looks hierarchy method does better than k-means.
+

@@ -1,0 +1,268 @@
+---
+title: "Analysis of Blog Contents of Data Science Websites"
+author: "Richard Soon"
+date: "Sunday, November 08, 2015"
+output: html_document
+---
+
+#Summary
+This document aims to analyze the contents of blogs on data science websites(http://www.datasciencecentral.com/, http://www.analyticbridge.com/, http://www.bigdatanews.com/), and distill top keywords from the contents by TfIdf weights. Then based on the keyword list, we build a table which recorded the TfIdf wieghts of keywords in each blog. Finally, we do certain clustering work on those blogs in terms of keywords weights.
+
+#Data Acquisition
+Ahead of this analysis, I have already scraped the links, contents and popularity of blogs by Python, mainly using "urllib2", "cookie", "BeautifulSoup" modules. Considering that I just finished my Natural Language Processing Capstone project through R several months ago, I will still use R and relevant packages(tm, RWeka and etc) to handle this analysis.
+
+#Data Cleaning
+Now there're three packs of blogs from the websites mentioned above, first we load them into corpus.
+```{r}
+library(tm)
+path<-"Blogs"
+blogs<-Corpus(DirSource(path,encoding="utf-8",recursive=T),readerControl = list(reader = readPlain,language="en"))
+blogs
+```
+There are 3324 articles in total. Let's have a look at the corpus. First try to figure out the number of characters in each blog. 
+```{r}
+getLength<-function(x){nchar(x[[1]][1])}#Get the length
+lens<-sapply(blogs$content,getLength)#Get character counts of reach blog
+hist(lens,xlab="Count of Characters",main="Histogram of Character Counts")#Histogram
+sum(lens<50)#How many blogs with characters fewer than 50
+```
+There 22 blogs with fewer than 50 characters, not quite usual, should be removed.
+```{r}
+blogs$content<-blogs$content[lens>=50]
+blogs$content[[1]][1]
+```
+Next remove extra spaces, foreign language signs, numbers as they are not important for text analysis. Finally, we need transform all the letters into lower forms.
+```{r}
+blogs<-tm_map(blogs,content_transformer(stripWhitespace))
+blogs<-tm_map(blogs,content_transformer(removeNumbers))
+replacewords<-function(line,wordA,wordB){gsub(wordA,wordB,line)}
+blogs<-tm_map(blogs,content_transformer(replacewords),"[^0-9a-zA-Z,.:!?'¡¯ -@$&]"," ")
+blogs<-tm_map(blogs,content_transformer(tolower))
+```
+
+#Find the most frequent words by TfIdf weights
+Actually, we can directly get keywords through Google Analytic or Baidu Analytic tools. Here, we would rather explore the contents of blogs by ourselves.
+First get the term matrix and find out frequent words.
+```{r}
+tdm<-TermDocumentMatrix(blogs)
+tdm
+head(findFreqTerms(tdm,1000,Inf),100)
+```
+Many of them are stop words, also many punctuations exist in the words, let's remove stopwords and punctuations. "tm" package provides a list of stop words in English, French and etc, but it is not enough. Therefore, I have searched a large volume of stop words online and saved it in a local path. 
+```{r}
+length(stopwords("en"))#Original stop word count
+suppressWarnings(myStopwords<-readLines("stopwords.txt"))#My stop words
+length(myStopwords)
+blogs<-tm_map(blogs,content_transformer(removeWords),myStopwords)#remove stopwords
+```
+Instead of analyzing the frequence of terms directly, we use TfIdf weighting method which can eliminate the influence of irrelevant words. We filter sparse words and confine the lengths of words so as to speed up the splitting process.
+```{r}
+tdm<-TermDocumentMatrix(blogs,control=list(removePunctuation=T,stopwords=T,minDocFreq=5,wordLengths = c(2, 20), weighting = function(x) weightTfIdf(x, normalize = FALSE)))# Remove punctuation and extreme long words
+wc<-as.matrix(removeSparseTerms(tdm,0.9))
+v<-sort(rowSums(wc),decreasing=T)
+frequentWords<-head(v,100)
+frequentWords
+```
+
+#Words Cloud
+Here we explore the weighted frequencies of words by word cloud. Certain words like "learning"
+```{r}
+library(wordcloud)
+suppressWarnings(wordcloud(names(v),v))
+```
+Certain words like "analytics", "hadoop", "mining" are relevant to data science, and they appear very frequently in the blogs. Yet there's still a typo "amp", we do not know what is it exactly, so we just ignore it.
+```{r}
+keywords<-removeWords(names(frequentWords),"amp")
+keywords<-keywords[keywords!=""]
+```
+
+#Find associated words
+In order to find the association between words, we use findAssocs tool in tm package. We presume the correlation limites are 0.6 for each word, in order to save time, we just search associated words of the first five words.
+```{r}
+associateWords<-findAssocs(tdm,keywords[1:5],0.6)#Find the associated words and return a list
+temp<-sapply(associateWords,length)#Show the number of associated words
+temp
+```
+Take a look at associated words of "big" and "data".
+```{r}
+associateWords["data"]
+associateWords["big"]
+```
+We can see that "data" is associated with "statistics","mining","database" and "machine", it is reasonable. If we wanna dig out more relevant words, it will be time-consuming by using findAssocs method. Let's try some other methods like dendrogram.
+```{r}
+hc<-hclust(dist(removeSparseTerms(tdm,0.9)),method="ward.D")
+plot(hc,xlab="Words from Blogs",hang = -1)
+wordCluster<-cutree(hc,k=8)
+wordCluster<-sort(wordCluster)
+wordCluster
+```
+It is clear that "maching", "learning" belong to the same type, whereas "model", "predictive", "big", "data" belong to another type. Besides, those words of type 1 tend to be irrelevant to data science, try to remove them.
+```{r}
+index<-wordCluster>1
+keywords2<-names(wordCluster[index])
+keywords2
+```
+We can compare keywords from different methods.
+```{r}
+sum(keywords %in% keywords2)
+```
+Almost 90 percent of frequent key words coincidents with those from hierarchy cluster. Therefore, those keywords can represent the topics of blogs.
+
+#Stemming
+There are some words appearing with their plus forms in the list, it's redundance, so we use stem method to get the basic forms.
+```{r}
+keywordsStem<-stemDocument(keywords)
+keywordsStem<-unique(keywordsStem)
+keywordsStem
+```
+We'll use the result later.
+
+#n-gram Tokenization
+Previously, we've analyzed the TfIdf weighted single words, in order to extract most frequent long tail terms, we should use 2-grams, 3-grams or 4-grams. Let's have a look at 2-grams.
+```{r}
+library(RWeka)
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+tdm2<-TermDocumentMatrix(blogs,control=list(tokenize=BigramTokenizer,removePunctuation=T,minDocFreq=5,stopwords=T,weighting = function(x) weightTfIdf(x, normalize = FALSE)))
+```
+Have a look at those terms.
+```{r}
+wc2<-as.matrix(removeSparseTerms(tdm2,0.9))
+v<-sort(rowSums(wc2),decreasing=T)
+suppressWarnings(wordcloud(names(v),v))
+head(v,20)
+bigramWords<-names(v)
+bigramWords
+```
+The last term is not quite right in terms of grammar, let's exlude it and store other terms along with single words obtained above .
+```{r}
+bigramWords<-bigramWords[-11]
+keyTerms<-c(keywords,usefulTerms)
+```
+
+Then look at 3-grams.
+```{r}
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+tdm3<-TermDocumentMatrix(blogs,control=list(tokenize=TrigramTokenizer,wordLength=c(2,30),removePunctuation=T,minDocFreq=5,weighting = function(x) weightTfIdf(x, normalize = FALSE)))
+wc3<-as.matrix(removeSparseTerms(tdm3,0.95))
+v<-sort(rowSums(wc3),decreasing=T)
+trigramWords<-names(v)
+head(v,20)
+```
+Most of trigrams are relevant to data science, but too specific as general key terms such as "job interview questions". We select the first one as key term.
+```{r}
+trigramWords<-trigramWords[1]
+keyTerms<-c(keyTerms,trigramWords[1])
+write(keyTerms,"keyTerms.txt")
+keyTerms
+```
+It's not likely that relevant terms appearing in 4 or 5 or higher grams, so we do not consider them. And now we have build a keywords list for those blogs.
+
+#Build frequency table
+Based on keyword list build above, we are going to explore the contents of blogs in terms of keywords. We have aquired TfIdf weights of words, what we need to do is create data frames, and combine them, then we will get data table which store the weights of keywords in each blog.
+```{r}
+unigram_dt<-data.frame(wc)
+unigram_dt<-unigram_dt[keywords,]#Build keywords table for unigrams
+bigram_dt<-data.frame(wc2)
+bigram_dt<-bigram_dt[bigramWords,]#Build bigram table
+trigram_dt<-data.frame(wc3)
+trigram_dt<-trigram_dt[trigramWords,]#Build trigram table
+dt<-rbind(unigram_dt,bigram_dt,trigram_dt)#Combine them
+dt<-t(dt)#Transpose it, now each row stands for a blog, and each column stands for a keyword
+dt<-data.frame(dt)
+```
+Now we have created data tables of keywords and blogs. Now we'd better visualize the data in order to get a glimpse of it. But there're too many columns, therefore, we adopt PCA method to reduce the dimensions.
+```{r}
+dt_pca<-prcomp(dt)#Calculate Components
+summary(dt_pca)
+```
+It shows that at least 53 components sum up over 90% of variance. In order to make visualizations, we select the first two components.
+```{r}
+dt_pca2<-dt_pca$x[,1:2]
+plot(dt_pca2,main="First Two Components of Keyword Weights in Blogs")
+```
+There three outliners in the plot, let's remove them.
+```{r}
+index<-dt_pca2[,1]>400
+dt_pca2<-dt_pca2[!index,]
+dt<-dt[!index,]
+```
+
+#Kmeans Clustering
+First, we can try k-means clustering first, assume there're two types.
+```{r}
+km<-kmeans(dt,centers=2,iter.max=100)
+km$centers
+plot(dt_pca2,col=km$cluster,main="First Two Components of Keyword Weights in Blogs")
+legend("topright",pch=1,col=c("black","red"),legend = c("Type I", "Type II"))
+sum(km$cluster==1)#Count of first type
+sum(km$cluster!=1)#count of second type
+```
+It seems these blogs can be separated into two classes. Most blogs are labeled as the first type and the first type seems more cohesive. 
+```{r}
+barplot(km$centers,xlab="Key Terms",ylab="Average Weights",main="Comparsion of Centers",legend=unique(km$cluster))
+```
+And let's see the variance.
+```{r}
+type<-km$cluster
+dt1<-dt[type==1,]
+dt2<-dt[type!=1,]
+var1<-apply(dt1,2,var)
+var2<-apply(dt2,2,var)
+var_hr<-rbind(var1,var2)
+barplot(var_hr,xlab="Key Terms",ylab="Weight Variance",main="Comparsion of Variances")
+```
+The variances are not quite distinct. We may wonder whether one type of blogs is from specific websites. Let's extract the names of blog files.
+```{r}
+substr<-function(line){sub("^X.","",line)}
+files1<-lapply(rownames(dt1),substr)#Remove the first letters of file names
+files2<-lapply(rownames(dt2),substr)#Remove the first letters of file names
+files1<-removePunctuation(unlist(files1))#Remove the punctuations
+files2<-removePunctuation(unlist(files2))
+files1_original<-list.files("DSC")#Blogs from DSC
+files2_original<-list.files("AnalyticBridge")#Blogs from AB
+files1_original<-removePunctuation(files1_original)#Remove the punctuations
+files2_original<-removePunctuation(files2_original)
+```
+Now see the result.
+```{r}
+sum(files1 %in% files1_original)/length(files1)
+sum(files2 %in% files1_original)/length(files2)
+sum(files1 %in% files2_original)/length(files1)
+sum(files2 %in% files2_original)/length(files2)
+```
+Actually, from the result, only half of type 1 blogs come from DSC, no websites have special preference on those blogs. In order to be more visual, here we just select 10 keywords and draw boxplot, it seems the second type has more variances.
+```{r}
+par(mfrow=c(2,1))
+boxplot(as.matrix(dt1[,1:10]),outline=F,ylim=c(0,12),xlab="Keywords",ylab="TfIdf Weights")
+boxplot(as.matrix(dt2[,1:10]),outline=F,ylim=c(0,12),xlab="Keywords",ylab="TfIdf Weights")
+```
+
+#Hierarchy Clustering
+Let's try hierarchy clustering here.
+```{r}
+par(mfrow=c(2,1))
+hc<-hclust(dist(dt),method="ward.D")
+result<-cutree(hc,k=2)
+plot(result,xlab="Blog Index",ylab="Type",main="Clustering Result")
+plot(dt_pca2,col=result,main="First Two Components of Keyword Weights in Blogs")
+legend("topright",pch=1,col=c("black","red"),legend = c("Type I", "Type II"))
+sum(result==1)
+sum(result!=1)
+```
+The result is quite different from that of kmeans. Try to compare the results of two methods by statistical properties.
+```{r}
+dt3<-dt[result==1,]#The first type
+dt4<-dt[result!=1,]#The other type
+means3<-apply(dt3,2,mean)
+means4<-apply(dt4,2,mean)
+centers_hr<-rbind(means3,means4)
+barplot(centers_hr,xlab="Key Terms",ylab="Average Weights",main="Comparsion of Centers")
+var3<-apply(dt3,2,var)
+var4<-apply(dt4,2,var)
+var_hr<-rbind(var3,var4)
+barplot(var_hr,xlab="Key Terms",ylab="Average Weights",main="Comparsion of Variances")
+```
+We can see hierarchy clustering perform better than k-means one, the variances are lower and quite distinct.
+
+#Conclusion
+TfIdf weights work well in building keywords list from the blogs, and those terms are quite relevant to data science(if stop words removed). We set the weights as blog features, and do unsupervised learning work on the blogs by k-means and hierachy methods. Both methods perform well in clustering, especially hierachy method does better in terms of variances.
