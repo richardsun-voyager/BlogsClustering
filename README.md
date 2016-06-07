@@ -1,6 +1,7 @@
 # Introduction
 
-This project was aimed to cluster over 2000 blogs from http://www.datasciencecentral.com/, I attempted to apply unsupervised learning methods to documents clustering problem based on my previous study, exactly:
+This project was aimed to cluster over 2000 blogs from http://www.datasciencecentral.com/, first I used Python to get the contents of blogs, then I used tm package of R to handle texts.
+I attempted to apply unsupervised learning methods to documents clustering problem based on my previous study, exactly:
 
 1. Scraped blogs from http://www.datasciencecentral.com/profiles/blogs using Python urllib, BeautifulSoup packages.
 
